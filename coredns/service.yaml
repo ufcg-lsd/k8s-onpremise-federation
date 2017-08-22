@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: coredns
+  namespace: kube-system
+  labels:
+    app: coredns
+spec:
+  selector:
+    app: coredns
+  ports:
+  - name: dns-tcp
+    port: 53
+    protocol: TCP
+  type: LoadBalancer
