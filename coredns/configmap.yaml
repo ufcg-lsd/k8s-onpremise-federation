@@ -2,14 +2,14 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: coredns
-  namespace: kube-system
+  namespace: default
 data:
   Corefile: |-
     .:53 {
         cache 30
-        etcd a4r.site. {
+        etcd example.com. {
           path /skydns
-          endpoint http://etcd-client-service-lb.core:2379
+          endpoint http://etcd-client-service.default:2379
         }
         health
         loadbalance round_robin
