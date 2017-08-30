@@ -21,7 +21,7 @@ spec:
       labels:
         app: keepalived-cloud-provider
     spec:
-      serviceAccount: keepalived-sa
+      serviceAccount: keepalived
       containers:
       - name: keepalived-cloud-provider
         image: quay.io/munnerz/keepalived-cloud-provider:0.0.1

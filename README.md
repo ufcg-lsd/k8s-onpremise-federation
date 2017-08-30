@@ -1,4 +1,4 @@
-# Kubernetes Federation for on-premises clusters
+# [WIP] Kubernetes Federation for on-premises clusters
 
 If you don't know the basics of Kubernetes Federation, you can take a look at this [doc](https://github.com/kubernetes/community/blob/master/contributors/design-proposals/federation.md).
 
@@ -102,66 +102,62 @@ users:
 ## <a name="deploy_keepalived"></a> Deploy keepalived-cloud-provider
 
 Before to build our own solution, we are investigating some ways to create services with `LoadBalancer` type because it's necessary for service discovery in federation, one of them is called [keepalived-cloud-provider](https://github.com/munnerz/keepalived-cloud-provider).
-<!-- TODO(arthur): Add RBAC -->
-We don't worry about RBAC configuration, and this should be updated soon, for now, we created a `permissive-binding` to supply this need.
 
-> Note:
-> - Permissive RBAC permission is not a recommended policy or suitable for production. See more [here](https://kubernetes.io/docs/admin/authorization/rbac/).
+We don't have RBAC resources for keepalived-cloud-provider, for now, we need create the service account called `keepalived` and grant superuser access to it. This will be updated soon.
+```
+$ kubectl create sa keepalived -n kube-system --context fcp
+$ kubectl create sa keepalived -n kube-system --context usa
+$ kubectl create sa keepalived -n kube-system --context chn
 
-```bash
-# NOTE: Enabling this means the “kube-system” namespace contains secrets that grant super-user access to the API.
-kubectl create clusterrolebinding add-on-cluster-admin \
+$ kubectl create clusterrolebinding keepalived \
   --clusterrole=cluster-admin \
-  --serviceaccount=kube-system:default
-
-$ kubectl -n kube-system create sa tiller
-$ kubectl create clusterrolebinding tiller --clusterrole cluster-admin --serviceaccount=kube-system:tiller
-$ helm init --service-account tiller
-
-# Creating a permissive binding for each context
-$ kubectl create clusterrolebinding permissive-binding \
-  --clusterrole=cluster-admin \
-  --user=admin \
-  --user=kubelet \
-  --group=system:serviceaccounts \
+  --serviceaccount=kube-system:keepalived \
   --context=fcp
-clusterrolebinding "permissive-binding" created
-$ kubectl create clusterrolebinding permissive-binding \
+$ kubectl create clusterrolebinding keepalived \
   --clusterrole=cluster-admin \
-  --user=admin \
-  --user=kubelet \
-  --group=system:serviceaccounts \
-  --context=chn
-clusterrolebinding "permissive-binding" created
-$ kubectl create clusterrolebinding permissive-binding \
-  --clusterrole=cluster-admin \
-  --user=admin \
-  --user=kubelet \
-  --group=system:serviceaccounts \
+  --serviceaccount=kube-system:keepalived \
   --context=usa
-clusterrolebinding "permissive-binding" created
+$ kubectl create clusterrolebinding keepalived \
+  --clusterrole=cluster-admin \
+  --serviceaccount=kube-system:keepalived \
+  --context=chn
 ```
 
-keepalived-cloud-provider has an [env variable](https://github.com/ufcg-lsd/k8s-onpremise-federation/blob/master/keepalived-cloud-provider/keepalived-provider.yaml#L33) to set the CIDR reserved for services, our plan is to have a DHCP service to supply IPs for them.
+Now, it's possible create the `kube-keepalive-vip` and `keepalive-cloud-provider`.
+The `keepalived-cloud-provider` has a [CIDR param](/keepalived-cloud-provider/deployment.yaml#35), change this value is indicated to have different CIDRs for our clusters, consequently one IP for each service.
 
 ```bash
+# Creating kube-keealived-vip for each context
+$ kubectl apply -f keepalived-vip/ --context fcp
+$ kubectl apply -f keepalived-vip/ --context chn
+$ kubectl apply -f keepalived-vip/ --context usa
+# Creating keealived-cloud-provider for each context
 $ kubectl apply -f keepalived-cloud-provider/ --context fcp
-deployment "keepalived-cloud-provider" created
-daemonset "kube-keepalived-vip" created
-configmap "vip-configmap" created
+# Change CIDR to 10.210.2.100/26
 $ kubectl apply -f keepalived-cloud-provider/ --context chn
-deployment "keepalived-cloud-provider" created
-daemonset "kube-keepalived-vip" created
-configmap "vip-configmap" created
+# Change CIDR to 10.210.3.100/26
 $ kubectl apply -f keepalived-cloud-provider/ --context usa
-deployment "keepalived-cloud-provider" created
-daemonset "kube-keepalived-vip" created
-configmap "vip-configmap" created
 ```
+
+### Configure the kube-controller-manager.
+
+If you deployed your cluster with kubeadm tool, you should edit `/etc/kubernetes/manifests/kube-controller-manager.yaml` file, adding `--cloud-provider=external` to the command section. 
+
+If you are using `kubeadm` file, then the following fragment will enable the external cloud provider.
+
+```bash
+controllerManagerExtraArgs:
+  cloud-provider: external
+```
+
+Now, it's possibe to create services with `LoadBalancer` type in the on-premisses clusters.
+> Note:
+> - This keepalived-cloud-provider is in alpha state, sometimes the pod is crashing (`kubectl get pods -n kube-system`) and it needs to be deleted, once it is rescheduled, works fine.  
+
 
 ## <a name="label_nodes"></a> Label the nodes
 
-We should add `failure-domain.beta.kubernetes.io/region=<region>` and `failure-domain.beta.kubernetes.io/zone=<zone>` labels for all nodes.
+You need add `failure-domain.beta.kubernetes.io/region=<region>` and `failure-domain.beta.kubernetes.io/zone=<zone>` labels for all nodes.
 
 ```bash
 # Adding region "america" and zone "us" labels in all nodes of usa-cluster
@@ -179,15 +175,12 @@ $ kubectl label --all nodes failure-domain.beta.kubernetes.io/zone=fr --context 
 
 ## <a name="deploy_etcd_operator"></a> Deploy etcd-operator
 
+The Federation Control Plane will be deployed in the `fcp-cluster`, so the `etcd-operator` and `CoreDNS` will be deployed in `fcp` context.
+
 ```bash
 $ kubectl apply -f etcd-operator/rbac.yaml 
-serviceaccount "etcd-operator" created
-clusterrole "etcd-operator" created
-clusterrolebinding "etcd-operator" created
 $ kubectl apply -f etcd-operator/deployment.yaml 
-deployment "etcd-operator" created
 $ kubectl apply -f etcd-operator/cluster.yaml 
-etcdcluster "etcd-cluster" created
 ```
 
 Now you should see the `etcd-cluster-client` service running on 2379 port.
@@ -195,10 +188,11 @@ Now you should see the `etcd-cluster-client` service running on 2379 port.
 $ kubectl get svc etcd-cluster-client
 NAME                  CLUSTER-IP     EXTERNAL-IP   PORT(S)             AGE
 etcd-cluster-client   10.100.41.37   <none>        2379/TCP            1m
+```
 
-# Testing etcd endpoint (etcd-cluster-client.default:2379) 
+You can run the commands bellow to test your `etcd-cluster-client` endpoint
+```bash
 $ kubectl run --rm -i --tty fun --image quay.io/coreos/etcd --restart=Never -- /bin/sh
-If you don't see a command prompt, try pressing enter.
 / # ETCDCTL_API=3 etcdctl --endpoints http://etcd-cluster-client.default:2379 put foo bar
 OK
 / # ETCDCTL_API=3 etcdctl --endpoints http://etcd-cluster-client.default:2379 get foo
@@ -209,45 +203,61 @@ bar
 ```
 
 > Note:
-> - It's possible use the [etcd-operator helm chart](https://github.com/kubernetes/charts/tree/master/stable/etcd-operator) too, to deploy it. 
+> - It is possible use the [etcd-operator helm chart](https://github.com/kubernetes/charts/tree/master/stable/etcd-operator) too, to deploy it. 
 
 ## <a name="deploy_coredns"></a> Deploy CoreDNS
 
+We use the [CoreDNS helm charts](https://github.com/kubernetes/charts/tree/master/stable/coredns) to deploy the CoreDNS as DNS provider of federation. 
+
+Getting Helm. See the [docs](https://docs.helm.sh/using_helm/#installing-helm).
+```bash
+$ curl https://raw.githubusercontent.com/kubernetes/helm/master/scripts/get > get_helm.sh
+$ chmod 700 get_helm.sh
+$ ./get_helm.sh
 ```
-$ kubectl apply -f coredns/
-configmap "coredns" created
-deployment "coredns" created
-serviceaccount "coredns" created
-clusterrole "system:coredns" configured
-clusterrolebinding "system:coredns" configured
-service "coredns" created
+
+Grant permissions and initilize Helm.
+```bash
+$ kubectl -n kube-system create sa tiller
+$ kubectl create clusterrolebinding tiller --clusterrole cluster-admin --serviceaccount=kube-system:tiller
+$ helm init --service-account tiller
 ```
 
-Now you should see the `coredns-coredns` service running
+The CoreDNS default configuration should be customized to suit the federation. Shown below is the coredns-chart-config.yaml, which overrides the default configuration parameters on the CoreDNS chart.
+
+```bash
+$ cat <<EOF > coredns-chart-values.yaml
+isClusterService: false
+serviceType: "NodePort"
+middleware:
+  kubernetes:
+    enabled: false
+  etcd:
+    enabled: true
+    zones:
+    - "example.com."
+    endpoint: "http://etcd-cluster-client.default:2379"
+EOF
 ```
-$ kubectl get svc coredns
-NAME        CLUSTER-IP     EXTERNAL-IP   PORT(S)                     AGE
-coredns     10.108.3.198   <nodes>       53:30053/UDP,53:30053/TCP   1m
+
+The above configuration file needs some explanation:
+* **isClusterService** specifies whether CoreDNS should be deployed as a cluster-service, which is the default. You need to set it to false, so that CoreDNS is deployed as a Kubernetes application service.
+* **serviceType** specifies the type of Kubernetes service to be created for CoreDNS. You need to choose either “LoadBalancer” or “NodePort” to make the CoreDNS service accessible outside the Kubernetes cluster.
+* Disable **middleware.kubernetes**, which is enabled by default by setting **middleware.kubernetes.enabled** to false.
+* Enable **middleware.etcd** by setting **middleware.etcd.enabled** to true.
+* Configure the DNS zone (federation domain) for which CoreDNS is authoritative by setting **middleware.etcd.zones** as shown above.
+* Configure the etcd endpoint which was deployed earlier by setting **middleware.etcd.endpoint**
+
+
+Deploy CoreDNS 
+```bash
+$ helm install --name coredns -f coredns-chart-values.yaml  stable/coredns
+
+# Now you should see the `coredns-coredns` service running
+$ kubectl get svc coredns-coredns
+NAME                  CLUSTER-IP      EXTERNAL-IP   PORT(S)                     AGE
+coredns-coredns       10.103.252.94   <nodes>       53:32609/UDP,53:32609/TCP   1m
 ```
-<!-- 
-############3
-
-kubectl exec -ti busybox -- nslookup  hello-lsd.default.federation.svc.fr.europe.example.com
-
-
-cannot update endpoints in the namespace "kube-system"
-
-kubectl run -it --rm --restart=Never --image=infoblox/dnstools:latest dnstools
-host hello-lsd.default.federation.svc.fr.europe.example.com
-hello-lsd.default.federation.svc.fr.europe.example.com has address 10.210.1.68
-########## -->
-
-
-> Note:
-> - It's possible use the [coredns helm chart](https://github.com/kubernetes/charts/tree/master/stable/coredns) too, to deploy it. 
-<!-- > - The CoreDNS [service](/coredns/service.yaml#L18) can be created with `LoadBalancer` type because the [keepalived-cloud-provider](#deploy_keepalived) is running.
-> - The CoreDNS [service](/coredns/service.yaml#14), by default is deployed to listen on both "TCP" and "UDP", but we can't create this service with `type: LoadBalancer`, so it is preferred to use either "TCP" or "UDP". -->
-
 
 ## <a name="initialize_fcp"></a> Initilizing the Federation Control Plane
 
@@ -267,31 +277,30 @@ $ tar -xzvf kubernetes-client-darwin-amd64.tar.gz
 $ curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/kubernetes-client-windows-amd64.tar.gz
 $ tar -xzvf kubernetes-client-windows-amd64.tar.gz
 ```
-
 > Note:
 > - You can download it to other architectures than amd64 in the [release page](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG.md#client-binaries-1).
 
 ```bash
 # Copy the extracted binaries to */usr/local/bin* path and set the executable permission to them.
 $ cp kubernetes/client/bin/kubefed /usr/local/bin
-$ chmod +x /usr/local/bin/kubefed
+$ chmod x /usr/local/bin/kubefed
 $ cp kubernetes/client/bin/kubectl /usr/local/bin
-$ chmod +x /usr/local/bin/kubectl
+$ chmod x /usr/local/bin/kubectl
 ```
 
 Create the **coredns-provider.conf** file with the following content:
 
 ```bash
-cat <<EOF > $HOME/coredns-provider.conf
+$ cat <<EOF > $HOME/coredns-provider.conf
 [Global]
-etcd-endpoints = http://etcd-cluster-client.fed-dns:2379
+etcd-endpoints = http://etcd-cluster-client.default:2379
 zones = example.com.
-coredns-endpoints = 10.210.1.65:53
+coredns-endpoints = 10.11.4.82:32609
 EOF
 ```
 > Notes:
-> - The `zones` field must be the same value of CoreDNS [configuration](coredns/configmap.yaml#L10)
-> - `coredns-endpoints` is the endpoint to access coredns server. This is an optional parameter introduced from v1.7 onwards.
+> - The `zones` field must be the same value of CoreDNS chart config 
+> - `coredns-endpoints` is the endpoint to access coredns server. The CoreDNS was deployed with `NodePort` type, so the endpoints is composed by <ip-of-nodes>:<port-of-service> This is an optional parameter introduced from v1.7 onwards.
 
 Now, initialize the Federation Control Plane (Use `kubefed init --help` for more information about the parameters)
 
@@ -351,6 +360,17 @@ fcp         Ready     3m
 chn         Ready     3m
 ```
 
+<!-- NOTES
+>> ADD ns default
+>> change - --server=/example.com./10.11.4.82#32609 kubeadm deploy
+>> change deployment order
+>> custom namespace fails
+>> etcd-operator chart fails
+ -->
+
+# References:
+IN PROGESS
+
 <!--TODO CREATE NS DEFAULT AND DEPLOY/SERVICES EXAMPLES-->
 
 ## Limitations:
@@ -358,8 +378,14 @@ chn         Ready     3m
 IN PROGRESS
 <!-- TODO(Arthur/Walter) Explain the fail in service discovery -->
 
-
 ## Contact
 
 Feel free to submit a PR if you want
 Any questions or suggestions, contact us at artmr@lsd.ufcg.edu.br
+
+<!-- 
+############3
+kubectl run -it --rm --restart=Never --image=infoblox/dnstools:latest dnstools
+host hello-lsd.default.federation.svc.fr.europe.example.com
+hello-lsd.default.federation.svc.fr.europe.example.com has address 10.210.1.68
+########## -->

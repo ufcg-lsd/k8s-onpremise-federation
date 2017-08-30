@@ -10,7 +10,7 @@ spec:
         name: kube-keepalived-vip
     spec:
       hostNetwork: true
-      serviceAccount: keepalived-sa
+      serviceAccount: keepalived
       containers:
         - image: gcr.io/google_containers/kube-keepalived-vip:0.9 
           # https://github.com/kubernetes/contrib/issues/2734 aledbf/kube-keepalived-vip:0.16
