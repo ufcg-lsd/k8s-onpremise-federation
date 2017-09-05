@@ -127,12 +127,19 @@ kubectl label --all nodes failure-domain.beta.kubernetes.io/zone=fr --context fc
 The Federation Control Plane will be deployed in the `fcp-cluster`, which means that the `etcd-operator` and `CoreDNS` will be deployed in `fcp` context.
 
 ```bash
-kubectl apply -f etcd-operator/
-etcdcluster "etcd-cluster" created
-deployment "etcd-operator" created
+# RBAC
+kubectl apply -f etcd-operator/rbac.yaml 
 serviceaccount "etcd-operator" created
 clusterrole "etcd-operator" created
 clusterrolebinding "etcd-operator" created
+
+# Deployment
+kubectl apply -f etcd-operator/deployment.yaml 
+deployment "etcd-operator" created
+
+# Wait the Pod status of etcd-operator to be running before creating the etcd-cluster
+kubectl apply -f etcd-operator/cluster.yaml 
+etcdcluster "etcd-cluster" created
 ```
 
 Now you should see the `etcd-cluster-client` service running on 2379 port.
@@ -238,9 +245,9 @@ tar -xzvf kubernetes-client-windows-amd64.tar.gz
 ```bash
 # Copy the extracted binaries to */usr/local/bin* path and set the executable permission to them.
 cp kubernetes/client/bin/kubefed /usr/local/bin
-chmod x /usr/local/bin/kubefed
+chmod +x /usr/local/bin/kubefed
 cp kubernetes/client/bin/kubectl /usr/local/bin
-chmod x /usr/local/bin/kubectl
+chmod +x /usr/local/bin/kubectl
 ```
 
 Create the **coredns-provider.conf** file with the following command:
